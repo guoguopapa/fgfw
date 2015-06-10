@@ -5,8 +5,8 @@ PROXY_LIST=/usr/bin/proxylist
 VPNC_CONFIG=/etc/vpnc/default.conf
 host=www.pgjsq.com
 user=username
-DEFAULT_ROOT=""
-pwd=pwd
+pwd=password
+route_set=no
 declare -A proxys
 proxy_num=0
 
@@ -77,9 +77,11 @@ vpnc_connect()
 	[ -z "$default_route" ] && return 1
 	vpnc --debug 2
 	[ $? -ne 0 ] && return 1
+	[ "$route_set" = "yes" ] && return 0
 	for net in `cat $WHITE_LIST` ; do
 		ip route add $net via $default_route 2>/dev/null 
 	done
+	route_set=yes
 	return 0
 }
 
