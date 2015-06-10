@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+start()
+{
+	start-stop-daemon -b -n fgfw -p /var/run/fgfw.pid -x /usr/bin/fgfw -S
+}
+
+stop()
+{
+	killall fgfw >/dev/null 2>&1
+	sleep 1
+	/usr/bin/vpnc-disconnect 2>/dev/null
+}
+

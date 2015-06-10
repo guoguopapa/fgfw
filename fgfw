@@ -1,0 +1,135 @@
+#!/bin/bash
+
+WHITE_LIST=/usr/bin/whitelist
+PROXY_LIST=/usr/bin/proxylist
+VPNC_CONFIG=/etc/vpnc/default.conf
+host=www.pgjsq.com
+user=username
+DEFAULT_ROOT=""
+pwd=pwd
+declare -A proxys
+proxy_num=0
+
+log()
+{
+	dstr=$(date)
+	echo $dstr:$@
+}
+
+get_white_list()
+{
+	curl -s http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest|grep ipv4|grep CN|awk -F'|'  '{printf("%s/%d\n", $4, 32-log($5)/log(2))}' > $WHITE_LIST
+}
+
+get_proxy_list()
+{
+        rm -f /tmp/cookie.txt
+        curl -s -c /tmp/cookie.txt http://$host -o /dev/null
+        curl -s -d "user=$user&pass=$pwd&sublogin=1" -b /tmp/cookie.txt http://$host/process.php -o /dev/null
+        curl -s -b /tmp/cookie.txt "http://$host/userinfo.php?user=$user"|/usr/bin/sed -n -e '/<td>/s/<td>\([0-9]\+.[0-9]\+.[0-9]\+.[0-9]\+.\)<\/td>/\1/gp' >$PROXY_LIST
+
+}
+
+init_proxys()
+{
+	if [ ! -f $PROXY_LIST ] ; then
+		get_proxy_list
+	fi
+	proxy_num=0
+	for proxy in `cat $PROXY_LIST` ; do
+		proxys[$proxy_num]=$(echo $proxy|tr -d '\r')
+		let proxy_num++
+	done 
+}
+
+get_default_route()
+{
+	ip route show|grep ^default|cut -d ' ' -f 3
+}
+
+check_fgfw()
+{
+	check_host="http://www.google.com"
+	curl -s --connect-timeout 10 $check_host >/dev/null 2>&1
+	return $?
+}
+
+vpnc_alive()
+{
+	ifconfig |grep -q ^tun
+}
+
+set_vpnc_server()
+{
+	server=$1
+	[ -z $server ] && return
+	/usr/bin/sed -i "s/^\(IPSec\s\+gateway\).*\$/\1 $proxy/g" /etc/vpnc/default.conf
+}
+
+vpnc_disconnect()
+{
+	vpnc-disconnect
+}
+
+vpnc_connect()
+{
+	default_route=$(get_default_route)
+	[ -z "$default_route" ] && return 1
+	vpnc --debug 2
+	[ $? -ne 0 ] && return 1
+	for net in `cat $WHITE_LIST` ; do
+		ip route add $net via $default_route 2>/dev/null 
+	done
+	return 0
+}
+
+start()
+{
+	proxy_id=0	
+	proxy_fail=0
+	while [ 0 ] ; do
+		if [ $proxy_num -eq 0 ] ; then
+			log "init proxys"
+			rm -f $PROXY_LIST
+			init_proxys
+			continue
+		fi
+		wl_num=$(cat $WHITE_LIST 2>/dev/null|wc -l)
+		if [ $wl_num -eq 0 ] ; then
+			log "init which list"
+			get_white_list
+		fi
+		if vpnc_alive ; then
+			if check_fgfw ; then
+				proxy_fail=0 
+				sleep 20
+				continue
+			else
+				log "proxy $proxy is dead, reconnect it"
+				vpnc_disconnect
+				sleep 5
+				let proxy_fail++
+				if [ $proxy_fail -ge $proxy_num ] ; then
+					proxy_num=0
+					continue
+				fi
+			fi
+		fi
+		proxy=${proxys[$proxy_id]}
+		set_vpnc_server $proxy
+		vpnc_connect
+		if [ $? -eq 0 ] ; then
+			log "connect proxy $proxy successed"
+		else
+			log "connect proxy $proxy failed"
+		fi
+		let proxy_id++
+		if [ $proxy_id -eq $proxy_num ] ; then
+			proxy_id=0
+		fi
+	done
+
+}
+
+
+start 2>&1|tee /tmp/fgfw.log
